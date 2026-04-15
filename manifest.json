@@ -1,25 +1,22 @@
 
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
-
-// PWA Service Worker Registration
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(err => {
-      console.log('SW registration failed: ', err);
-    });
-  });
+{
+  "name": "Controle Da Rose",
+  "short_name": "Rose Gestão",
+  "description": "Sistema moderno para gestão de vendas e comissões da Rose.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#920074",
+  "icons": [
+    {
+      "src": "https://lh3.googleusercontent.com/d/1iKUG-XgBn6q1F7twzG0KuBJRudE4jb2J",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://lh3.googleusercontent.com/d/1iKUG-XgBn6q1F7twzG0KuBJRudE4jb2J",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }
-
-const rootElement = document.getElementById('root');
-if (!rootElement) {
-  throw new Error("Could not find root element to mount to");
-}
-
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
