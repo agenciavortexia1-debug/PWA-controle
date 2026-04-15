@@ -1,7 +1,22 @@
+
 {
   "name": "Controle Da Rose",
-  "description": "Um sistema moderno para gestão de vendas e cálculo automático de comissões, integrado com Inteligência Artificial para análise de desempenho e insights de vendas.",
-  "requestFramePermissions": [],
-  "y7": [],
-  "Vp": []
+  "short_name": "Rose Gestão",
+  "description": "Sistema moderno para gestão de vendas e comissões da Rose.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#920074",
+  "icons": [
+    {
+      "src": "https://lh3.googleusercontent.com/d/1iKUG-XgBn6q1F7twzG0KuBJRudE4jb2J",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://lh3.googleusercontent.com/d/1iKUG-XgBn6q1F7twzG0KuBJRudE4jb2J",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }
