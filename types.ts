@@ -15,17 +15,11 @@ export interface Sale {
   saleType?: SaleType;
   adCost?: number; // Custo por venda (se Tráfego Pago)
   discount?: number; // Valor do desconto dado
-}
-
-export interface Lead {
-  id: string;
-  clientName: string;
-  phone?: string;
-  productInterest?: string;
-  expectedDate?: string;
-  notes?: string;
-  createdAt: string;
-  status: 'Pending' | 'Contacted' | 'Converted' | 'Lost';
+  // Atacado: cada produto do pedido é uma linha, todas com o mesmo orderId.
+  // No varejo, wholesale é false e quantity é 1.
+  wholesale?: boolean;
+  quantity?: number;
+  orderId?: string;
 }
 
 export interface SalesSummary {

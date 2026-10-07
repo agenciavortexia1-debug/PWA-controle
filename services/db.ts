@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { Sale, Lead, InventoryItem } from '../types';
+import { Sale, InventoryItem } from '../types';
 
 const SUPABASE_URL = 'https://xjmtxshvpwcyrfbxsmpj.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqbXR4c2h2cHdjeXJmYnhzbXBqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MTIyNDksImV4cCI6MjA4NDE4ODI0OX0.Qlo4xPAhPtRFRzkcC7p-aoHTDCdEdnmTuuzTOXynYRQ';
@@ -31,7 +31,10 @@ export const getSales = async (): Promise<Sale[]> => {
       status: item.status,
       saleType: item.sale_type,
       adCost: toNum(item.ad_cost),
-      discount: toNum(item.discount)
+      discount: toNum(item.discount),
+      wholesale: item.wholesale === true,
+      quantity: item.quantity ? Number(item.quantity) : 1,
+      orderId: item.order_id ?? undefined
     })) as Sale[];
   } catch (err) {
     return [];
@@ -64,54 +67,39 @@ export const addSale = async (sale: Sale): Promise<Sale> => {
 };
 
 export const deleteSale = async (id: string): Promise<void> => {
-  await supabase.from('sales').delete().eq('id', id);
+  const { error } = await supabase.from('sales').delete().eq('id', id);
+  if (error) throw error;
 };
 
-export const getLeads = async (): Promise<Lead[]> => {
-  try {
-    const { data, error } = await supabase
-      .from('leads')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    
-    return (data || []).map(item => ({
-      id: item.id,
-      clientName: item.client_name,
-      phone: item.phone,
-      productInterest: item.product_interest,
-      expectedDate: item.expected_date,
-      notes: item.notes,
-      createdAt: item.created_at,
-      status: item.status
-    })) as Lead[];
-  } catch (err) {
-    return [];
-  }
-};
-
-export const addLead = async (lead: Lead): Promise<Lead> => {
-  const { data, error } = await supabase
-    .from('leads')
-    .insert([{
-      id: lead.id,
-      client_name: lead.clientName,
-      phone: lead.phone,
-      product_interest: lead.productInterest,
-      expected_date: lead.expectedDate,
-      notes: lead.notes,
-      status: lead.status
-    }])
-    .select()
-    .single();
+// Um pedido de atacado entra de uma vez só: se uma linha falhar, nenhuma entra.
+export const addWholesaleOrder = async (lines: Sale[]): Promise<void> => {
+  const { error } = await supabase
+    .from('sales')
+    .insert(lines.map(sale => ({
+      id: sale.id,
+      client_name: sale.clientName,
+      product_name: sale.productName,
+      amount: sale.amount,
+      cost: sale.cost,
+      freight: sale.freight,
+      commission_rate: sale.commissionRate,
+      commission_value: sale.commissionValue,
+      date: sale.date,
+      status: sale.status,
+      sale_type: null,
+      ad_cost: 0,
+      discount: 0,
+      wholesale: true,
+      quantity: sale.quantity,
+      order_id: sale.orderId
+    })));
 
   if (error) throw error;
-  return data as unknown as Lead;
 };
 
-export const deleteLead = async (id: string): Promise<void> => {
-  await supabase.from('leads').delete().eq('id', id);
+export const deleteOrder = async (orderId: string): Promise<void> => {
+  const { error } = await supabase.from('sales').delete().eq('order_id', orderId);
+  if (error) throw error;
 };
 
 export const getInventory = async (): Promise<InventoryItem[]> => {
@@ -176,9 +164,11 @@ export const restockProduct = async (productName: string, additionalQuantity: nu
     const currentQty = toNum(existing.quantity);
     const currentCost = toNum(existing.cost_price);
     
+    // Unidade "devendo" (estoque negativo) não tem custo para entrar na média.
+    const qtyComCusto = Math.max(0, currentQty);
     const newQty = currentQty + additionalQuantity;
-    const totalValue = (currentQty * currentCost) + batchTotalCost;
-    const newAverageCost = newQty > 0 ? totalValue / newQty : 0;
+    const totalValue = (qtyComCusto * currentCost) + batchTotalCost;
+    const newAverageCost = qtyComCusto + additionalQuantity > 0 ? totalValue / (qtyComCusto + additionalQuantity) : 0;
 
     await supabase
       .from('inventory')
@@ -193,7 +183,15 @@ export const restockProduct = async (productName: string, additionalQuantity: nu
 };
 
 export const deleteProduct = async (id: string): Promise<InventoryItem[]> => {
-  await supabase.from('inventory').delete().eq('id', id);
+  const { error } = await supabase.from('inventory').delete().eq('id', id);
+  if (error) throw error;
+  return getInventory();
+};
+
+// Contagem: troca a quantidade pelo que ela contou. O custo médio fica.
+export const setStockQuantity = async (productName: string, quantity: number): Promise<InventoryItem[]> => {
+  const { error } = await supabase.from('inventory').update({ quantity }).eq('product_name', productName);
+  if (error) throw error;
   return getInventory();
 };
 

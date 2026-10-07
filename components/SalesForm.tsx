@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, Info } from 'lucide-react';
 import { Sale, SaleType, InventoryItem } from '../types';
+import { hojeManaus } from '../utils/datas';
 
 interface SalesFormProps {
   onAddSale: (sale: Sale) => void;
@@ -20,7 +21,7 @@ export const SalesForm: React.FC<SalesFormProps> = ({ onAddSale, onClose, invent
     amount: '',
     freight: '',
     commissionRate: '10',
-    date: new Date().toISOString().split('T')[0],
+    date: hojeManaus(),
     saleType: 'Instagram' as SaleType,
     adCost: '',
     discount: '',

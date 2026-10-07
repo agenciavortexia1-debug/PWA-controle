@@ -1,81 +1,65 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  LayoutDashboard, 
-  TrendingUp, 
-  DollarSign, 
-  Users, 
-  CreditCard, 
-  Search, 
-  Trash2, 
-  Package, 
-  Loader2, 
-  Home, 
+import {
+  LayoutDashboard,
+  TrendingUp,
+  DollarSign,
+  Users,
+  CreditCard,
+  Search,
+  Trash2,
+  Package,
+  Loader2,
+  Home,
   Wallet,
   Calendar,
-  UserPlus,
   RefreshCw,
-  ShoppingCart,
   Info,
   Truck,
   ChevronLeft,
   ChevronRight,
-  Filter,
   XCircle,
   Plus,
   BarChart3,
   PieChart as PieIcon,
   CalendarDays,
-  ArrowUpCircle,
-  ArrowDownCircle,
   TrendingDown,
   Download,
-  ArrowRight,
-  Scale
+  Scale,
+  Boxes,
+  SlidersHorizontal,
+  ClipboardList,
+  ChevronDown
 } from 'lucide-react';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  ResponsiveContainer, 
-  Cell, 
-  LabelList, 
-  Tooltip, 
-  PieChart, 
-  Pie, 
-  LineChart, 
-  Line, 
-  CartesianGrid,
-  Legend
-} from 'recharts';
-import { Sale, SalesSummary, Lead, InventoryItem, SaleType } from './types';
+import { Sale, SalesSummary, InventoryItem, SaleType } from './types';
 import { SalesForm } from './components/SalesForm';
-import { LeadForm } from './components/LeadForm';
+import { AtacadoForm } from './components/AtacadoForm';
+import { DateRangePicker } from './components/DateRangePicker';
 import { InventoryForm } from './components/InventoryForm';
 import { StatsCard } from './components/StatsCard';
+import { Confirmacao } from './components/Confirmacao';
+import { ListaDeBarras } from './components/ListaDeBarras';
+import { GraficoEvolucao, PontoEvolucao } from './components/GraficoEvolucao';
 import * as db from './services/db';
+import { hojeManaus, dataCurta, mesmoDiaMesAnterior, periodoDa, Escala } from './utils/datas';
 
-const CustomTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-white p-3 shadow-xl rounded-xl border border-gray-50">
-        <p className="text-xs font-black text-gray-400 uppercase tracking-tighter mb-1">{payload[0].payload.name || payload[0].payload.date}</p>
-        {payload.map((p: any, index: number) => (
-          <p key={index} className={`text-sm font-black ${p.dataKey === 'profit' || p.dataKey === 'lucro' ? 'text-emerald-600' : 'text-[#920074]'}`}>
-            {p.name}: {p.dataKey === 'salesCount' ? p.value : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(p.value)}
-          </p>
-        ))}
-        {payload[0].payload.salesCount !== undefined && payload[0].dataKey !== 'salesCount' && (
-          <p className="text-[10px] font-bold text-gray-500">
-            Vendas: {payload[0].payload.salesCount} un.
-          </p>
-        )}
-      </div>
-    );
-  }
-  return null;
-};
+// Roxo = faturamento e vendas; verde = lucro. Par validado para daltonismo.
+const ROXO = '#920074';
+const VERDE = '#059669';
+
+// O banco guarda a origem sem acento; na tela ela aparece escrita certo.
+const ROTULO_ORIGEM: Record<string, string> = { Indicacao: 'Indicação', 'Trafego Pago': 'Tráfego Pago' };
+const rotuloOrigem = (tipo?: string) => (tipo ? ROTULO_ORIGEM[tipo] ?? tipo : '');
+
+// Unidades vendidas na linha: no varejo é sempre 1.
+const unidades = (sale: Sale) => sale.quantity || 1;
+
+// O mesmo produto chegou a ser gravado com e sem espaço no fim ("Mounnjaro " e
+// "Mounnjaro"); nos números ele conta como um só.
+const nomeDoProduto = (sale: Sale) => sale.productName.trim();
+
+const lucroDaVenda = (sale: Sale) =>
+  sale.amount - (sale.discount || 0) - sale.commissionValue - (sale.cost || 0) - (sale.freight || 0) - (sale.adCost || 0);
 
 const parseLocalDate = (dateStr: string) => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -84,35 +68,43 @@ const parseLocalDate = (dateStr: string) => {
 
 const App: React.FC = () => {
   const [sales, setSales] = useState<Sale[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [isLeadFormOpen, setIsLeadFormOpen] = useState(false);
+  const [isAtacadoFormOpen, setIsAtacadoFormOpen] = useState(false);
   const [isInventoryFormOpen, setIsInventoryFormOpen] = useState(false);
-  
+  const [confirmacao, setConfirmacao] = useState<{ titulo: string; texto: string; confirmar: string; acao: () => Promise<void> } | null>(null);
+
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'leads' | 'inventory' | 'repurchase' | 'kpis'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'kpis'>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const [salesFormInitialData, setSalesFormInitialData] = useState<{clientName: string, productName: string} | null>(null);
   const [inventoryFormInitialProduct, setInventoryFormInitialProduct] = useState<InventoryItem | null>(null);
-  const [convertingLeadId, setConvertingLeadId] = useState<string | null>(null);
+  const [inventoryFormMode, setInventoryFormMode] = useState<'add' | 'restock' | 'count'>('add');
+  const abrirEstoque = (modo: 'add' | 'restock' | 'count', produto: InventoryItem | null) => {
+    setInventoryFormMode(modo);
+    setInventoryFormInitialProduct(produto);
+    setIsInventoryFormOpen(true);
+  };
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   const [saleTypeFilter, setSaleTypeFilter] = useState<SaleType | 'Todos'>('Todos');
+  const [channelFilter, setChannelFilter] = useState<'Todos' | 'Varejo' | 'Atacado'>('Todos');
   const [selectedChartProduct, setSelectedChartProduct] = useState<string | null>(null);
-  const [kpiPeriod, setKpiPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [filtrosAbertos, setFiltrosAbertos] = useState(false);
+  const [calendarioAberto, setCalendarioAberto] = useState(false);
   
-  // Comparison State
-  const [comparePeriodA, setComparePeriodA] = useState({ 
-    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toLocaleDateString('en-CA'), 
-    end: new Date().toLocaleDateString('en-CA') 
+  // Comparativo: A começa no dia 1º do mês e vai até hoje; B é o mesmo pedaço
+  // do mês anterior e acompanha A sempre que A muda.
+  const [comparePeriodA, setComparePeriodA] = useState(() => {
+    const hoje = hojeManaus();
+    return { start: hoje.slice(0, 8) + '01', end: hoje };
   });
-  const [comparePeriodB, setComparePeriodB] = useState({ 
-    start: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString('en-CA'), 
-    end: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 15).toLocaleDateString('en-CA') 
+  const [comparePeriodB, setComparePeriodB] = useState(() => {
+    const hoje = hojeManaus();
+    return { start: mesmoDiaMesAnterior(hoje.slice(0, 8) + '01'), end: mesmoDiaMesAnterior(hoje) };
   });
+  const [calendarioComparativo, setCalendarioComparativo] = useState<'A' | 'B' | null>(null);
 
   // PWA Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -139,13 +131,11 @@ const App: React.FC = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [salesData, leadsData, inventoryData] = await Promise.all([
+      const [salesData, inventoryData] = await Promise.all([
         db.getSales(),
-        db.getLeads(),
         db.getInventory()
       ]);
       setSales(salesData);
-      setLeads(leadsData);
       setInventory(inventoryData);
     } catch (error) {
       console.error("Erro ao carregar dados:", error);
@@ -154,38 +144,71 @@ const App: React.FC = () => {
     }
   };
 
-  const filteredSales = useMemo(() => {
-    return sales.filter(sale => {
-      let datePass = true;
-      if (dateFilter.start || dateFilter.end) {
-        const saleDate = parseLocalDate(sale.date);
-        const start = dateFilter.start ? parseLocalDate(dateFilter.start) : new Date(2000, 0, 1);
-        const end = dateFilter.end ? parseLocalDate(dateFilter.end) : new Date(2099, 11, 31);
-        saleDate.setHours(0,0,0,0);
-        start.setHours(0,0,0,0);
-        end.setHours(0,0,0,0);
-        datePass = saleDate >= start && saleDate <= end;
+  // Filtros do painel. `data` liga o período e `produto` liga o produto
+  // tocado no gráfico; tipo, origem e busca valem sempre.
+  const passa = (sale: Sale, { data = true, produto = true } = {}) => {
+    if (data && dateFilter.start && sale.date < dateFilter.start) return false;
+    if (data && dateFilter.end && sale.date > dateFilter.end) return false;
+    if (saleTypeFilter !== 'Todos' && sale.saleType !== saleTypeFilter) return false;
+    if (channelFilter !== 'Todos' && (channelFilter === 'Atacado') !== !!sale.wholesale) return false;
+    if (produto && selectedChartProduct && nomeDoProduto(sale) !== selectedChartProduct) return false;
+    if (searchTerm) {
+      const termo = searchTerm.toLowerCase();
+      if (!sale.clientName.toLowerCase().includes(termo) && !sale.productName.toLowerCase().includes(termo)) return false;
+    }
+    return true;
+  };
+
+  const filteredSales = useMemo(() => sales.filter(sale => passa(sale)),
+    [sales, dateFilter, saleTypeFilter, channelFilter, searchTerm, selectedChartProduct]);
+
+  // No Histórico, os produtos de um pedido de atacado aparecem juntos, numa linha só.
+  const historico = useMemo(() => {
+    const linhas: { chave: string; venda: Sale; itens: Sale[] }[] = [];
+    const porPedido = new Map<string, { chave: string; venda: Sale; itens: Sale[] }>();
+    filteredSales.forEach(sale => {
+      if (!sale.orderId) {
+        linhas.push({ chave: sale.id, venda: sale, itens: [sale] });
+        return;
       }
-      let typePass = true;
-      if (saleTypeFilter !== 'Todos') {
-        typePass = sale.saleType === saleTypeFilter;
+      const pedido = porPedido.get(sale.orderId);
+      if (pedido) {
+        pedido.itens.push(sale);
+        return;
       }
-      let chartPass = true;
-      if (selectedChartProduct) {
-        chartPass = sale.productName === selectedChartProduct;
-      }
-      let searchPass = true;
-      if (searchTerm) {
-        const term = searchTerm.toLowerCase();
-        searchPass = sale.clientName.toLowerCase().includes(term) || 
-                     sale.productName.toLowerCase().includes(term);
-      }
-      return datePass && typePass && chartPass && searchPass;
+      const novo = { chave: sale.orderId, venda: sale, itens: [sale] };
+      porPedido.set(sale.orderId, novo);
+      linhas.push(novo);
     });
-  }, [sales, dateFilter, saleTypeFilter, searchTerm, selectedChartProduct]);
+    return linhas;
+  }, [filteredSales]);
+
+  const rotuloPeriodo = !dateFilter.start && !dateFilter.end
+    ? 'Todo o período'
+    : dateFilter.start === dateFilter.end
+      ? `Dia ${dataCurta(dateFilter.start)}`
+      : `${dataCurta(dateFilter.start)} → ${dataCurta(dateFilter.end)}`;
+
+  // O que está filtrando agora, em palavras (aparece com o painel fechado).
+  const filtrosSemPeriodo = [
+    channelFilter !== 'Todos' ? channelFilter : '',
+    saleTypeFilter !== 'Todos' ? rotuloOrigem(saleTypeFilter) : '',
+    searchTerm.trim() ? `"${searchTerm.trim()}"` : '',
+  ].filter(Boolean);
+  const filtrosAtivos = [(dateFilter.start || dateFilter.end) ? rotuloPeriodo : '', ...filtrosSemPeriodo].filter(Boolean);
+  // O comparativo tem datas próprias, mas segue os outros filtros e o produto tocado no gráfico.
+  const filtrosDoComparativo = [...filtrosSemPeriodo, selectedChartProduct || ''].filter(Boolean);
+
+  const limparFiltros = () => {
+    setDateFilter({ start: '', end: '' });
+    setChannelFilter('Todos');
+    setSaleTypeFilter('Todos');
+    setSearchTerm('');
+    setCalendarioAberto(false);
+  };
 
   const summary: SalesSummary = useMemo(() => {
-    return filteredSales.reduce((acc, sale) => {
+    const totais = filteredSales.reduce((acc, sale) => {
         const adCost = sale.adCost || 0;
         const discount = sale.discount || 0;
         const freight = sale.freight || 0;
@@ -197,134 +220,101 @@ const App: React.FC = () => {
           totalNetProfit: acc.totalNetProfit + netProfit,
           totalFreight: acc.totalFreight + freight,
           totalProductCost: acc.totalProductCost + productCost,
-          salesCount: acc.salesCount + 1,
-          averageTicket: (acc.totalSales + sale.amount) / (acc.salesCount + 1),
+          salesCount: 0,
+          averageTicket: 0,
         };
       }, { totalSales: 0, totalCommission: 0, totalNetProfit: 0, totalFreight: 0, totalProductCost: 0, salesCount: 0, averageTicket: 0 }
     );
+    // "Vendas" conta pedidos: um pedido de atacado com 3 produtos é 1 venda.
+    const pedidos = new Set(filteredSales.map(sale => sale.orderId || sale.id)).size;
+    return { ...totais, salesCount: pedidos, averageTicket: pedidos ? totais.totalSales / pedidos : 0 };
   }, [filteredSales]);
 
-  const repurchaseList = useMemo(() => {
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    const lastSalesByClient: Record<string, Sale> = {};
-    sales.forEach(sale => {
-      if (!lastSalesByClient[sale.clientName] || parseLocalDate(sale.date) > parseLocalDate(lastSalesByClient[sale.clientName].date)) {
-        lastSalesByClient[sale.clientName] = sale;
-      }
-    });
-    return Object.values(lastSalesByClient).filter(sale => {
-        const saleDate = parseLocalDate(sale.date);
-        saleDate.setHours(0,0,0,0);
-        const diffDays = Math.ceil(Math.abs(today.getTime() - saleDate.getTime()) / (1000 * 60 * 60 * 24)); 
-        return diffDays >= 28;
-    }).sort((a, b) => parseLocalDate(b.date).getTime() - parseLocalDate(a.date).getTime());
-  }, [sales]);
-
+  // O ranking ignora o produto tocado: as outras barras ficam cinza, não somem.
   const chartData = useMemo(() => {
-    const data: Record<string, { amount: number, count: number }> = {};
-    const salesForChart = sales.filter(sale => {
-      let datePass = true;
-      if (dateFilter.start || dateFilter.end) {
-        const saleDate = parseLocalDate(sale.date);
-        const start = dateFilter.start ? parseLocalDate(dateFilter.start) : new Date(2000, 0, 1);
-        const end = dateFilter.end ? parseLocalDate(dateFilter.end) : new Date(2099, 11, 31);
-        saleDate.setHours(0,0,0,0);
-        start.setHours(0,0,0,0);
-        end.setHours(0,0,0,0);
-        datePass = saleDate >= start && saleDate <= end;
-      }
-      let typePass = true;
-      if (saleTypeFilter !== 'Todos') {
-        typePass = sale.saleType === saleTypeFilter;
-      }
-      return datePass && typePass;
-    });
-    salesForChart.forEach(sale => {
-      if (!data[sale.productName]) {
-        data[sale.productName] = { amount: 0, count: 0 };
-      }
-      data[sale.productName].amount += sale.amount;
-      data[sale.productName].count += 1;
+    const data: Record<string, { amount: number, units: number }> = {};
+    sales.filter(sale => passa(sale, { produto: false })).forEach(sale => {
+      const nome = nomeDoProduto(sale);
+      if (!data[nome]) data[nome] = { amount: 0, units: 0 };
+      data[nome].amount += sale.amount;
+      data[nome].units += unidades(sale);
     });
     return Object.keys(data)
-      .map(name => ({ 
-        name, 
-        value: data[name].amount, 
-        salesCount: data[name].count 
-      }))
+      .map(name => ({ name, value: data[name].amount, units: data[name].units }))
       .sort((a, b) => b.value - a.value);
-  }, [sales, dateFilter, saleTypeFilter]);
+  }, [sales, dateFilter, saleTypeFilter, channelFilter, searchTerm]);
 
-  // KPI INDICATORS CALCULATION
+  // KPIs. "Vendas" conta pedidos (atacado com 3 produtos = 1 venda) e
+  // "un." soma as quantidades, do mesmo jeito que os cards do Início.
   const kpis = useMemo(() => {
-    const byModality: Record<string, { value: number, profit: number, salesCount: number }> = {};
-    const byProductProfit: Record<string, { profit: number, salesCount: number }> = {};
-    const timeSeries: Record<string, { date: string, amount: number, profit: number, salesCount: number }> = {};
-    const weekdayData = [
-      { name: 'Dom', amount: 0, profit: 0, salesCount: 0 },
-      { name: 'Seg', amount: 0, profit: 0, salesCount: 0 },
-      { name: 'Ter', amount: 0, profit: 0, salesCount: 0 },
-      { name: 'Qua', amount: 0, profit: 0, salesCount: 0 },
-      { name: 'Qui', amount: 0, profit: 0, salesCount: 0 },
-      { name: 'Sex', amount: 0, profit: 0, salesCount: 0 },
-      { name: 'Sáb', amount: 0, profit: 0, salesCount: 0 },
-    ];
+    const byModality: Record<string, { profit: number }> = {};
+    const byProduct: Record<string, { profit: number, units: number }> = {};
+    const semana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'].map(name => ({ name, amount: 0, pedidos: new Set<string>() }));
 
     filteredSales.forEach(sale => {
-      const profit = sale.amount - (sale.discount || 0) - sale.commissionValue - (sale.cost || 0) - (sale.freight || 0) - (sale.adCost || 0);
-      const type = sale.saleType || 'Instagram';
-      if (!byModality[type]) byModality[type] = { value: 0, profit: 0, salesCount: 0 };
-      byModality[type].value += sale.amount;
-      byModality[type].profit += profit;
-      byModality[type].salesCount += 1;
+      const profit = lucroDaVenda(sale);
+      const modalidade = sale.wholesale ? 'Atacado' : rotuloOrigem(sale.saleType || 'Instagram');
+      if (!byModality[modalidade]) byModality[modalidade] = { profit: 0 };
+      byModality[modalidade].profit += profit;
 
-      if (!byProductProfit[sale.productName]) byProductProfit[sale.productName] = { profit: 0, salesCount: 0 };
-      byProductProfit[sale.productName].profit += profit;
-      byProductProfit[sale.productName].salesCount += 1;
+      const nome = nomeDoProduto(sale);
+      if (!byProduct[nome]) byProduct[nome] = { profit: 0, units: 0 };
+      byProduct[nome].profit += profit;
+      byProduct[nome].units += unidades(sale);
 
-      const dateObj = parseLocalDate(sale.date);
-      let timeKey = sale.date; 
-      if (kpiPeriod === 'weekly') {
-        const firstDayOfYear = new Date(dateObj.getFullYear(), 0, 1);
-        const week = Math.ceil((((dateObj.getTime() - firstDayOfYear.getTime()) / 86400000) + firstDayOfYear.getDay() + 1) / 7);
-        timeKey = `Semana ${week}/${dateObj.getFullYear().toString().slice(-2)}`;
-      } else if (kpiPeriod === 'monthly') {
-        timeKey = `${(dateObj.getMonth() + 1).toString().padStart(2, '0')}/${dateObj.getFullYear()}`;
-      }
-
-      if (!timeSeries[timeKey]) timeSeries[timeKey] = { date: timeKey, amount: 0, profit: 0, salesCount: 0 };
-      timeSeries[timeKey].amount += sale.amount;
-      timeSeries[timeKey].profit += profit;
-      timeSeries[timeKey].salesCount += 1;
-
-      const dayIdx = dateObj.getDay();
-      weekdayData[dayIdx].amount += sale.amount;
-      weekdayData[dayIdx].profit += profit;
-      weekdayData[dayIdx].salesCount += 1;
+      const dia = semana[parseLocalDate(sale.date).getDay()];
+      dia.amount += sale.amount;
+      dia.pedidos.add(sale.orderId || sale.id);
     });
 
-    const timeSeriesList = Object.values(timeSeries).sort((a,b) => a.date.localeCompare(b.date));
-    const sortedTimeSeries = [...timeSeriesList].sort((a,b) => b.amount - a.amount);
-
+    const modality = Object.keys(byModality).map(name => ({ name, profit: byModality[name].profit })).sort((a, b) => b.profit - a.profit);
     return {
-      modality: Object.keys(byModality).map(name => ({ name, value: byModality[name].value, profit: byModality[name].profit, salesCount: byModality[name].salesCount })),
-      productProfit: Object.keys(byProductProfit).map(name => ({ name, profit: byProductProfit[name].profit, salesCount: byProductProfit[name].salesCount })).sort((a,b) => b.profit - a.profit),
-      timeSeries: timeSeriesList,
-      weekday: weekdayData,
-      bestPeriod: sortedTimeSeries.length > 0 ? sortedTimeSeries[0] : null,
-      worstPeriod: sortedTimeSeries.length > 0 ? sortedTimeSeries[sortedTimeSeries.length - 1] : null
+      modality,
+      totalProfit: modality.reduce((soma, m) => soma + m.profit, 0),
+      productProfit: Object.keys(byProduct).map(name => ({ name, ...byProduct[name] })).sort((a, b) => b.profit - a.profit),
+      weekday: semana.map(({ pedidos, ...d }) => ({ ...d, salesCount: pedidos.size })),
     };
-  }, [filteredSales, kpiPeriod]);
+  }, [filteredSales]);
+
+  // Evolução: a escala acompanha o tamanho do período (até 31 dias, dia a dia;
+  // até 4 meses, semana a semana; acima disso, mês a mês), para caber no
+  // celular. Períodos sem venda entram zerados, para o buraco aparecer.
+  const evolucao = useMemo(() => {
+    const hoje = hojeManaus();
+    const datas = filteredSales.map(sale => sale.date).sort();
+    const inicio = dateFilter.start || datas[0] || hoje;
+    const fim = dateFilter.end || (datas.length && datas[datas.length - 1] > hoje ? datas[datas.length - 1] : hoje);
+    const dias = Math.round((Date.parse(fim) - Date.parse(inicio)) / 86400000) + 1;
+    const escala: Escala = dias <= 31 ? 'daily' : dias <= 120 ? 'weekly' : 'monthly';
+    const atual = periodoDa(hoje, escala).chave;
+
+    const pontos = new Map<string, PontoEvolucao & { pedidos: Set<string> }>();
+    for (let t = Date.parse(inicio); t <= Date.parse(fim); t += 86400000) {
+      const { chave, rotulo, eixo } = periodoDa(new Date(t).toISOString().slice(0, 10), escala);
+      if (!pontos.has(chave)) pontos.set(chave, { chave, rotulo, eixo, faturamento: 0, lucro: 0, vendas: 0, parcial: chave === atual, pedidos: new Set() });
+    }
+    filteredSales.forEach(sale => {
+      const ponto = pontos.get(periodoDa(sale.date, escala).chave);
+      if (!ponto) return;
+      ponto.faturamento += sale.amount;
+      ponto.lucro += lucroDaVenda(sale);
+      ponto.pedidos.add(sale.orderId || sale.id);
+    });
+    return { escala, pontos: [...pontos.values()].map(({ pedidos, ...p }) => ({ ...p, vendas: pedidos.size })) };
+  }, [filteredSales, dateFilter]);
 
   const handleAddSale = async (newSale: Sale) => {
     setSales(prev => [newSale, ...prev]);
     await db.addSale(newSale);
     await db.updateStockQuantity(newSale.productName, -1);
-    if (convertingLeadId) {
-        setLeads(prev => prev.filter(l => l.id !== convertingLeadId));
-        await db.deleteLead(convertingLeadId);
-        setConvertingLeadId(null);
+    loadData();
+  };
+
+  const handleAddWholesale = async (lines: Sale[]) => {
+    await db.addWholesaleOrder(lines);
+    setSales(prev => [...lines, ...prev]);
+    for (const line of lines) {
+      await db.updateStockQuantity(line.productName, -unidades(line));
     }
     loadData();
   };
@@ -339,67 +329,75 @@ const App: React.FC = () => {
     setInventory(updated);
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if(window.confirm('Excluir este produto do estoque?')) {
-        const updated = await db.deleteProduct(id);
-        setInventory(updated);
-    }
+  const handleCountInventory = async (productName: string, quantity: number) => {
+    setInventory(await db.setStockQuantity(productName, quantity));
   };
 
-  const handleConvertLead = (lead: Lead) => {
-    setConvertingLeadId(lead.id);
-    setSalesFormInitialData({ clientName: lead.clientName, productName: lead.productInterest || '' });
-    setIsFormOpen(true);
-  };
+  const pedirApagarProduto = (item: InventoryItem) => setConfirmacao({
+    titulo: `Excluir ${item.productName.trim()} do estoque?`,
+    texto: 'O produto sai da lista do estoque e das opções de venda. As vendas já lançadas com ele continuam no histórico e nos números.',
+    confirmar: 'Excluir produto',
+    acao: async () => { setInventory(await db.deleteProduct(item.id)); },
+  });
 
-  const handleChartClick = (data: any) => {
-    if (data && data.activeLabel) {
-      const productName = data.activeLabel;
-      setSelectedChartProduct(prev => prev === productName ? null : productName);
-    }
+  // Apagar uma venda devolve as unidades dela ao estoque (o pedido de atacado
+  // inteiro, se for atacado).
+  const pedirApagarVenda = (itens: Sale[]) => {
+    const venda = itens[0];
+    const total = itens.reduce((soma, i) => soma + i.amount, 0);
+    const voltam = itens.filter(i => inventory.some(p => p.productName === i.productName));
+    const devolucao = voltam.length
+      ? `${voltam.map(i => `${unidades(i)} ${nomeDoProduto(i)}`).join(', ')} ${voltam.length === 1 && unidades(voltam[0]) === 1 ? 'volta' : 'voltam'} para o estoque.`
+      : 'O estoque não muda, porque o produto não está mais cadastrado.';
+    setConfirmacao({
+      titulo: venda.wholesale ? 'Apagar este pedido de atacado?' : 'Apagar esta venda?',
+      texto: `${venda.clientName}, ${dataCurta(venda.date)}, ${formatCurrency(total)}. ${devolucao} Não dá para desfazer.`,
+      confirmar: venda.wholesale ? 'Apagar pedido' : 'Apagar venda',
+      acao: async () => {
+        if (venda.orderId) await db.deleteOrder(venda.orderId);
+        else await db.deleteSale(venda.id);
+        for (const item of voltam) await db.updateStockQuantity(item.productName, unidades(item));
+        await loadData();
+      },
+    });
   };
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
-  const totalModalityProfit = useMemo(() => kpis.modality.reduce((sum, item) => sum + item.profit, 0), [kpis.modality]);
 
-  const getPeriodSummary = (startStr: string, endStr: string) => {
-    const start = parseLocalDate(startStr);
-    const end = parseLocalDate(endStr);
-    start.setHours(0,0,0,0);
-    end.setHours(0,0,0,0);
-
-    return sales.filter(sale => {
-      const saleDate = parseLocalDate(sale.date);
-      saleDate.setHours(0,0,0,0);
-      return saleDate >= start && saleDate <= end;
-    }).reduce((acc, sale) => {
-      const profit = sale.amount - (sale.discount || 0) - sale.commissionValue - (sale.cost || 0) - (sale.freight || 0) - (sale.adCost || 0);
-      return {
-        sales: acc.sales + sale.amount,
-        profit: acc.profit + profit,
-        count: acc.count + 1
-      };
-    }, { sales: 0, profit: 0, count: 0 });
+  // Comparativo: as datas são dele, mas tipo, origem e busca seguem os
+  // filtros, como o resto da guia. "Vendas" conta pedidos.
+  const resumoDoPeriodo = (inicio: string, fim: string) => {
+    const doPeriodo = sales.filter(sale => sale.date >= inicio && sale.date <= fim && passa(sale, { data: false }));
+    return {
+      sales: doPeriodo.reduce((soma, sale) => soma + sale.amount, 0),
+      profit: doPeriodo.reduce((soma, sale) => soma + lucroDaVenda(sale), 0),
+      count: new Set(doPeriodo.map(sale => sale.orderId || sale.id)).size,
+    };
   };
 
   const comparison = useMemo(() => {
-    const a = getPeriodSummary(comparePeriodA.start, comparePeriodA.end);
-    const b = getPeriodSummary(comparePeriodB.start, comparePeriodB.end);
-    
-    const calcDiff = (valA: number, valB: number) => {
-      if (valB === 0) return valA > 0 ? 100 : 0;
-      return ((valA - valB) / valB) * 100;
-    };
-
+    const a = resumoDoPeriodo(comparePeriodA.start, comparePeriodA.end);
+    const b = resumoDoPeriodo(comparePeriodB.start, comparePeriodB.end);
+    // Sem nada no período B não existe porcentagem: a tela mostra só os valores.
+    const variacao = (valA: number, valB: number) => (valB === 0 ? null : ((valA - valB) / Math.abs(valB)) * 100);
     return {
       periodA: a,
       periodB: b,
-      diffSales: calcDiff(a.sales, b.sales),
-      diffProfit: calcDiff(a.profit, b.profit),
-      diffCount: calcDiff(a.count, b.count)
+      diffSales: variacao(a.sales, b.sales),
+      diffProfit: variacao(a.profit, b.profit),
+      diffCount: variacao(a.count, b.count),
     };
-  }, [sales, comparePeriodA, comparePeriodB]);
+  }, [sales, comparePeriodA, comparePeriodB, saleTypeFilter, channelFilter, searchTerm, selectedChartProduct]);
+
+  const escolherPeriodoA = (start: string, end: string) => {
+    setComparePeriodA({ start, end });
+    setComparePeriodB({ start: mesmoDiaMesAnterior(start), end: mesmoDiaMesAnterior(end) });
+    setCalendarioComparativo(null);
+  };
+
+  const rotuloIntervalo = (inicio: string, fim: string) =>
+    inicio === fim ? `Dia ${dataCurta(inicio)}` : `${dataCurta(inicio)} → ${dataCurta(fim)}`;
 
   if (loading && sales.length === 0) {
     return (
@@ -443,13 +441,7 @@ const App: React.FC = () => {
           <button onClick={() => setActiveTab('inventory')} title="Estoque" className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition ${activeTab === 'inventory' ? 'bg-slate-800 text-[#f5d0ed]' : 'text-slate-400 hover:text-white'} ${sidebarCollapsed ? 'justify-center' : ''}`}>
             <Package size={20} /> {!sidebarCollapsed && <span>Estoque</span>}
           </button>
-          <button onClick={() => setActiveTab('leads')} title="Pendentes" className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition ${activeTab === 'leads' ? 'bg-slate-800 text-[#f5d0ed]' : 'text-slate-400 hover:text-white'} ${sidebarCollapsed ? 'justify-center' : ''}`}>
-            <Users size={20} /> {!sidebarCollapsed && <span>Pendentes</span>}
-          </button>
-          <button onClick={() => setActiveTab('repurchase')} title="Recompra" className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition ${activeTab === 'repurchase' ? 'bg-slate-800 text-[#f5d0ed]' : 'text-slate-400 hover:text-white'} ${sidebarCollapsed ? 'justify-center' : ''}`}>
-            <RefreshCw size={20} /> {!sidebarCollapsed && <span>Recompra</span>}
-          </button>
-          
+
           {/* PWA Download Button in Sidebar */}
           {deferredPrompt && (
             <button 
@@ -470,8 +462,7 @@ const App: React.FC = () => {
               <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
                   {activeTab === 'dashboard' ? 'Olá Rose, boas vendas!' : 
                    activeTab === 'kpis' ? 'Indicadores de Desempenho' :
-                   activeTab === 'inventory' ? 'Meu Almoxarifado' : 
-                   activeTab === 'repurchase' ? 'Hora de Recontato!' : 'Gestão'}
+                   activeTab === 'inventory' ? 'Meu Almoxarifado' : 'Gestão'}
               </h1>
               <p className="text-gray-500 text-sm mt-1">Acompanhe seu desempenho e metas.</p>
             </div>
@@ -489,85 +480,46 @@ const App: React.FC = () => {
               
               {activeTab === 'inventory' ? (
                 <div className="flex gap-2 w-full sm:w-auto">
-                  <button onClick={() => { setInventoryFormInitialProduct(null); setIsInventoryFormOpen(true); }} className="flex-1 sm:flex-none justify-center border-2 border-[#920074] text-[#920074] px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-50 transition">
+                  <button onClick={() => abrirEstoque('restock', null)} className="flex-1 sm:flex-none justify-center border-2 border-[#920074] text-[#920074] px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-50 transition">
                     <RefreshCw size={18} /> <span className="text-sm">Repor Estoque</span>
                   </button>
-                  <button onClick={() => { setInventoryFormInitialProduct(null); setIsInventoryFormOpen(true); }} className="flex-1 sm:flex-none justify-center bg-[#920074] text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-[#74005c] transition">
+                  <button onClick={() => abrirEstoque('add', null)} className="flex-1 sm:flex-none justify-center bg-[#920074] text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-[#74005c] transition">
                     <Plus size={18} /> <span className="text-sm">Novo Produto</span>
                   </button>
                 </div>
-              ) : activeTab === 'leads' ? (
-                  <button onClick={() => setIsLeadFormOpen(true)} className="flex-1 md:flex-none justify-center bg-[#920074] text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-[#74005c] transition">
-                    <UserPlus size={18} /> <span className="text-sm">Novo Pendente</span>
+              ) : activeTab === 'dashboard' && (
+                // Lançar venda só no Início: Vendas e KPIs ficam só para consultar.
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <button onClick={() => setIsAtacadoFormOpen(true)} className="flex-1 sm:flex-none justify-center border-2 border-[#920074] text-[#920074] px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-50 transition">
+                    <Boxes size={18} /> <span className="text-sm">Venda Atacado</span>
                   </button>
-              ) : (
-                  <button onClick={() => setIsFormOpen(true)} className="flex-1 md:flex-none justify-center bg-[#920074] text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-[#74005c] transition">
-                    {/* Fixed "Cannot find name 'PlusCircle'" by using 'Plus' instead */}
+                  <button onClick={() => setIsFormOpen(true)} className="flex-1 sm:flex-none justify-center bg-[#920074] text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-[#74005c] transition">
                     <Plus size={18} /> <span className="text-sm">Nova Venda</span>
                   </button>
+                </div>
               )}
             </div>
           </div>
 
           {(activeTab === 'dashboard' || activeTab === 'sales' || activeTab === 'kpis') && (
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                <div className="flex-1 relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                  <input 
-                      type="text" 
-                      placeholder="Buscar cliente ou produto..." 
-                      className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm shadow-sm focus:ring-2 focus:ring-[#920074] outline-none"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                  {searchTerm && (
-                    <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
-                      <XCircle size={16} />
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-gray-200 shadow-sm overflow-x-auto no-scrollbar whitespace-nowrap">
-                  <Calendar size={14} className="text-[#920074] ml-1" />
-                  <input 
-                      type="date" 
-                      value={dateFilter.start} 
-                      onChange={(e) => setDateFilter({...dateFilter, start: e.target.value})}
-                      className="text-xs bg-transparent outline-none text-gray-900 border-none focus:ring-0 p-0 w-28"
-                  />
-                  <span className="text-gray-300">até</span>
-                  <input 
-                      type="date" 
-                      value={dateFilter.end} 
-                      onChange={(e) => setDateFilter({...dateFilter, end: e.target.value})}
-                      className="text-xs bg-transparent outline-none text-gray-900 border-none focus:ring-0 p-0 w-28"
-                  />
-                </div>
-              </div>
-
+            // Os filtros ficam guardados atrás de um botão: no dia a dia a tela
+            // mostra só as vendas. Com filtro ligado, o botão diz quantos são e
+            // a linha de baixo diz quais, para nada ficar escondido.
+            <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1">
-                  <Filter size={14} className="text-[#920074] flex-shrink-0" />
-                  <span className="text-xs font-bold text-gray-400 uppercase tracking-tighter whitespace-nowrap">Origem:</span>
-                  <div className="flex items-center gap-1.5 ml-1">
-                    {['Todos', 'Instagram', 'Indicacao', 'Trafego Pago', 'Pessoal'].map((type) => (
-                      <button
-                        key={type}
-                        onClick={() => setSaleTypeFilter(type as any)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${
-                          saleTypeFilter === type 
-                          ? 'bg-[#920074] text-white border-[#920074] shadow-sm shadow-[#920074]/30' 
-                          : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        {type}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
+                <button
+                  onClick={() => { setFiltrosAbertos(v => !v); setCalendarioAberto(false); }}
+                  className={`flex items-center gap-2 px-4 py-2.5 bg-white border rounded-xl text-sm font-bold shadow-sm transition ${filtrosAtivos.length ? 'border-[#920074] text-[#920074]' : 'border-gray-200 text-gray-600'}`}
+                >
+                  <SlidersHorizontal size={16} /> Filtros
+                  {filtrosAtivos.length > 0 && <span className="bg-[#920074] text-white text-[10px] leading-none rounded-full px-1.5 py-1">{filtrosAtivos.length}</span>}
+                  <ChevronDown size={16} className={`transition-transform ${filtrosAbertos ? 'rotate-180' : ''}`} />
+                </button>
+                {filtrosAtivos.length > 0 && (
+                  <button onClick={limparFiltros} className="text-xs font-bold text-gray-500 hover:text-[#920074] underline px-1">Limpar</button>
+                )}
                 {selectedChartProduct && (
-                  <button 
+                  <button
                     onClick={() => setSelectedChartProduct(null)}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-100 text-[#920074] border border-purple-200 rounded-full text-xs font-black uppercase transition-all animate-fade-in"
                   >
@@ -575,6 +527,98 @@ const App: React.FC = () => {
                   </button>
                 )}
               </div>
+
+              {filtrosAtivos.length > 0 && !filtrosAbertos && (
+                <p className="text-xs text-gray-500 break-words">{filtrosAtivos.join(' · ')}</p>
+              )}
+
+              {filtrosAbertos && (
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-4 animate-fade-in">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                    <input
+                        type="text"
+                        placeholder="Buscar cliente ou produto..."
+                        className="w-full pl-10 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-[#920074] outline-none"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                    {searchTerm && (
+                      <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                        <XCircle size={16} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter">Período</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => setCalendarioAberto(v => !v)}
+                        className={`flex items-center gap-2 px-4 py-2.5 border rounded-xl text-sm font-medium transition ${calendarioAberto ? 'border-[#920074] text-[#920074]' : 'border-gray-200 text-gray-800'}`}
+                      >
+                        <Calendar size={14} className="text-[#920074]" /> {rotuloPeriodo}
+                      </button>
+                      {(dateFilter.start || dateFilter.end) && (
+                        <button onClick={() => { setDateFilter({ start: '', end: '' }); setCalendarioAberto(false); }} className="text-xs font-bold text-gray-500 hover:text-[#920074] underline px-1">
+                          Ver todo o período
+                        </button>
+                      )}
+                    </div>
+                    {calendarioAberto && (
+                      <div className="max-w-xs">
+                        <DateRangePicker
+                          startDate={dateFilter.start}
+                          endDate={dateFilter.end}
+                          onRange={(start, end) => { setDateFilter({ start, end }); setCalendarioAberto(false); }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter">Tipo de venda</p>
+                    <div className="grid grid-cols-3 bg-gray-50 p-1 rounded-xl border border-gray-100 max-w-xs">
+                      {(['Todos', 'Varejo', 'Atacado'] as const).map(canal => (
+                        <button
+                          key={canal}
+                          onClick={() => { setChannelFilter(canal); if (canal === 'Atacado') setSaleTypeFilter('Todos'); }}
+                          className={`py-2 rounded-lg text-xs font-bold transition ${channelFilter === canal ? 'bg-[#920074] text-white shadow-sm' : 'text-gray-500'}`}
+                        >
+                          {canal === 'Todos' ? 'Todas' : canal}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {channelFilter !== 'Atacado' && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter">Origem</p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {['Todos', 'Instagram', 'Indicacao', 'Trafego Pago', 'Pessoal'].map((type) => (
+                          <button
+                            key={type}
+                            onClick={() => setSaleTypeFilter(type as any)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${
+                              saleTypeFilter === type
+                              ? 'bg-[#920074] text-white border-[#920074] shadow-sm shadow-[#920074]/30'
+                              : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                            }`}
+                          >
+                            {rotuloOrigem(type)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <button onClick={() => { setFiltrosAbertos(false); setCalendarioAberto(false); }} className="text-sm font-bold text-[#920074] hover:underline">
+                      Fechar
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -591,59 +635,18 @@ const App: React.FC = () => {
                 </div>
                 
                 <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm">
-                    <div className="flex items-center justify-between mb-8">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
                       <h3 className="text-lg font-bold text-gray-800">Ranking de Faturamento por Produto</h3>
                       <span className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter flex items-center gap-1.5">
-                        <Info size={12} className="text-[#920074]" /> Toque na barra para filtrar
+                        <Info size={12} className="text-[#920074]" /> Toque num produto para filtrar
                       </span>
                     </div>
-                    <div className="h-72 md:h-80 w-full cursor-pointer">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart 
-                              data={chartData} 
-                              margin={{ top: 20, right: 20, left: 20, bottom: 80 }}
-                              onClick={handleChartClick}
-                            >
-                                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
-                                <XAxis 
-                                  dataKey="name" 
-                                  tick={{
-                                    fontSize: 8.5, 
-                                    fill: '#64748b',
-                                    angle: -40,
-                                    textAnchor: 'end',
-                                    dy: 5
-                                  } as any} 
-                                  axisLine={false} 
-                                  tickLine={false} 
-                                  interval={0}
-                                />
-                                <YAxis hide={true} />
-                                <Bar dataKey="value" fill="#920074" radius={[6, 6, 0, 0]} barSize={45}>
-                                    {chartData.map((entry, i) => (
-                                      <Cell 
-                                        key={i} 
-                                        fill={selectedChartProduct && entry.name !== selectedChartProduct ? '#e2e8f0' : ['#920074', '#8B5CF6', '#10B981', '#3B82F6', '#F59E0B'][i % 5]} 
-                                        className="transition-all duration-300 hover:opacity-80"
-                                      />
-                                    ))}
-                                    <LabelList 
-                                      dataKey="value" 
-                                      position="top" 
-                                      formatter={(val: number) => `R$${val.toFixed(0)}`} 
-                                      style={{ fontSize: '11px', fontWeight: 'bold', fill: '#64748b' }}
-                                    />
-                                    <LabelList 
-                                      dataKey="salesCount" 
-                                      position="insideTop" 
-                                      offset={10}
-                                      formatter={(val: number) => val > 5 ? `${val} un.` : ''}
-                                      style={{ fontSize: '10px', fontWeight: 'black', fill: '#ffffff', textShadow: '0px 1px 2px rgba(0,0,0,0.3)' }}
-                                    />
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </div>
+                    <ListaDeBarras
+                      cor={ROXO}
+                      selecionado={selectedChartProduct}
+                      onToque={nome => setSelectedChartProduct(atual => (atual === nome ? null : nome))}
+                      itens={chartData.map(p => ({ chave: p.name, rotulo: p.name, valor: p.value, texto: formatCurrency(p.value), detalhe: `${p.units} un.` }))}
+                    />
                 </div>
             </div>
         )}
@@ -652,225 +655,112 @@ const App: React.FC = () => {
           <div className="space-y-6 animate-fade-in">
             {/* Comparativo de Períodos */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-purple-50">
-              <div className="flex items-center gap-2 mb-6">
+              <div className="flex items-center gap-2 mb-1">
                 <Scale className="text-[#920074]" size={20} />
                 <h3 className="font-bold text-gray-800">Comparativo de Períodos</h3>
               </div>
-              
+              <p className="text-xs text-gray-400 mb-6">
+                Quando você muda o período A, o B vira os mesmos dias do mês anterior.
+                {filtrosDoComparativo.length > 0 && <> Considerando só: {filtrosDoComparativo.join(' · ')}.</>}
+              </p>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                <div className="space-y-3">
-                  <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Período Atual (A)</p>
-                  <div className="flex items-center gap-2 bg-gray-50 p-2 rounded-xl border border-gray-100">
-                    <input type="date" value={comparePeriodA.start} onChange={(e) => setComparePeriodA({...comparePeriodA, start: e.target.value})} className="bg-transparent text-xs font-bold outline-none w-full" />
-                    <span className="text-gray-300">até</span>
-                    <input type="date" value={comparePeriodA.end} onChange={(e) => setComparePeriodA({...comparePeriodA, end: e.target.value})} className="bg-transparent text-xs font-bold outline-none w-full" />
+                {([['A', 'Período atual (A)', comparePeriodA], ['B', 'Comparar com (B)', comparePeriodB]] as const).map(([qual, titulo, periodo]) => (
+                  <div key={qual} className="space-y-2">
+                    <p className="text-xs font-black text-gray-400 uppercase tracking-wider">{titulo}</p>
+                    <button
+                      onClick={() => setCalendarioComparativo(aberto => (aberto === qual ? null : qual))}
+                      className={`flex items-center gap-2 px-4 py-2.5 border rounded-xl text-sm font-medium transition ${calendarioComparativo === qual ? 'border-[#920074] text-[#920074]' : 'border-gray-200 text-gray-800'}`}
+                    >
+                      <Calendar size={14} className="text-[#920074]" /> {rotuloIntervalo(periodo.start, periodo.end)}
+                    </button>
+                    {calendarioComparativo === qual && (
+                      <div className="max-w-xs">
+                        <DateRangePicker
+                          startDate={periodo.start}
+                          endDate={periodo.end}
+                          onRange={(start, end) => {
+                            if (qual === 'A') return escolherPeriodoA(start, end);
+                            setComparePeriodB({ start, end });
+                            setCalendarioComparativo(null);
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
-                </div>
-                <div className="space-y-3">
-                  <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Período de Comparação (B)</p>
-                  <div className="flex items-center gap-2 bg-gray-50 p-2 rounded-xl border border-gray-100">
-                    <input type="date" value={comparePeriodB.start} onChange={(e) => setComparePeriodB({...comparePeriodB, start: e.target.value})} className="bg-transparent text-xs font-bold outline-none w-full" />
-                    <span className="text-gray-300">até</span>
-                    <input type="date" value={comparePeriodB.end} onChange={(e) => setComparePeriodB({...comparePeriodB, end: e.target.value})} className="bg-transparent text-xs font-bold outline-none w-full" />
-                  </div>
-                </div>
+                ))}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Faturamento</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-lg font-black text-slate-900">{formatCurrency(comparison.periodA.sales)}</span>
-                    <div className={`flex items-center text-[10px] font-bold ${comparison.diffSales >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {comparison.diffSales >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                      {Math.abs(comparison.diffSales).toFixed(1)}%
+                {([
+                  ['Faturamento', formatCurrency(comparison.periodA.sales), formatCurrency(comparison.periodB.sales), comparison.diffSales],
+                  ['Lucro Líquido', formatCurrency(comparison.periodA.profit), formatCurrency(comparison.periodB.profit), comparison.diffProfit],
+                  ['Vendas', String(comparison.periodA.count), String(comparison.periodB.count), comparison.diffCount],
+                ] as const).map(([titulo, valorA, valorB, diferenca]) => (
+                  <div key={titulo} className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{titulo}</p>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-lg font-black text-slate-900">{valorA}</span>
+                      {/* Sem nada no período B não há base para porcentagem. */}
+                      {diferenca !== null && (
+                        <div className={`flex items-center text-[10px] font-bold ${diferenca >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {diferenca >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                          {Math.abs(diferenca).toFixed(1)}%
+                        </div>
+                      )}
                     </div>
+                    <p className="text-[10px] text-gray-400 mt-1">vs {valorB}</p>
                   </div>
-                  <p className="text-[10px] text-gray-400 mt-1">vs {formatCurrency(comparison.periodB.sales)}</p>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Lucro Líquido</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-lg font-black text-slate-900">{formatCurrency(comparison.periodA.profit)}</span>
-                    <div className={`flex items-center text-[10px] font-bold ${comparison.diffProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {comparison.diffProfit >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                      {Math.abs(comparison.diffProfit).toFixed(1)}%
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-1">vs {formatCurrency(comparison.periodB.profit)}</p>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Qtd. Vendas</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-lg font-black text-slate-900">{comparison.periodA.count} un.</span>
-                    <div className={`flex items-center text-[10px] font-bold ${comparison.diffCount >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {comparison.diffCount >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                      {Math.abs(comparison.diffCount).toFixed(1)}%
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-1">vs {comparison.periodB.count} un.</p>
-                </div>
+                ))}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {kpis.bestPeriod && (
-                <div className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4 transition-all hover:shadow-md border border-emerald-50">
-                  <div className="p-3 rounded-xl bg-emerald-50 text-emerald-600">
-                    <ArrowUpCircle size={28} />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Melhor Período ({kpiPeriod === 'daily' ? 'Dia' : kpiPeriod === 'weekly' ? 'Semana' : 'Mês'})</p>
-                    <h3 className="text-lg font-black text-gray-900">{kpis.bestPeriod.date}</h3>
-                    <p className="text-xs font-bold text-emerald-600">{formatCurrency(kpis.bestPeriod.amount)} em vendas</p>
-                  </div>
-                </div>
-              )}
-              {kpis.worstPeriod && (
-                <div className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4 transition-all hover:shadow-md border border-red-50">
-                  <div className="p-3 rounded-xl bg-red-50 text-red-600">
-                    <ArrowDownCircle size={28} />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Pior Período ({kpiPeriod === 'daily' ? 'Dia' : kpiPeriod === 'weekly' ? 'Semana' : 'Mês'})</p>
-                    <h3 className="text-lg font-black text-gray-900">{kpis.worstPeriod.date}</h3>
-                    <p className="text-xs font-bold text-red-600">{formatCurrency(kpis.worstPeriod.amount)} em vendas</p>
-                  </div>
-                </div>
-              )}
+            <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm">
+              <div className="flex items-center gap-2 mb-1">
+                <CalendarDays className="text-[#920074]" size={20} />
+                <h3 className="font-bold text-gray-800">Evolução de Vendas e Lucro</h3>
+              </div>
+              <p className="text-xs text-gray-400 mb-4">
+                {rotuloPeriodo}, {evolucao.escala === 'daily' ? 'dia a dia' : evolucao.escala === 'weekly' ? 'semana a semana' : 'mês a mês'}. A escala muda sozinha conforme o período dos filtros.
+              </p>
+              <GraficoEvolucao pontos={evolucao.pontos} />
             </div>
 
-            <div className="flex bg-white p-1 rounded-xl shadow-sm w-fit border border-gray-100">
-              {(['daily', 'weekly', 'monthly'] as const).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setKpiPeriod(p)}
-                  className={`px-4 py-2 text-xs font-bold uppercase rounded-lg transition-all ${
-                    kpiPeriod === p ? 'bg-[#920074] text-white shadow-md' : 'text-gray-400 hover:text-gray-600'
-                  }`}
-                >
-                  {p === 'daily' ? 'Diário' : p === 'weekly' ? 'Semanal' : 'Mensal'}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm">
-                <div className="flex items-center gap-2 mb-6">
-                  <CalendarDays className="text-[#920074]" size={20} />
-                  <h3 className="font-bold text-gray-800">Evolução de Vendas e Lucro</h3>
-                </div>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={kpis.timeSeries}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="date" tick={{fontSize: 10}} axisLine={false} tickLine={false} />
-                      <YAxis hide />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend iconType="circle" />
-                      <Line name="Faturamento" type="monotone" dataKey="amount" stroke="#920074" strokeWidth={3} dot={{r: 4, fill: '#920074'}} activeDot={{r: 6}} />
-                      <Line name="Lucro Líquido" type="monotone" dataKey="profit" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#10b981'}} activeDot={{r: 6}} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl shadow-sm">
-                <div className="flex items-center gap-2 mb-6">
-                  <Calendar className="text-[#920074]" size={20} />
-                  <h3 className="font-bold text-gray-800">Melhores Dias da Semana</h3>
-                </div>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={kpis.weekday} margin={{ bottom: 10 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis 
-                        dataKey="name" 
-                        axisLine={false} 
-                        tickLine={false} 
-                        tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }}
-                        padding={{ left: 10, right: 10 }}
-                      />
-                      <YAxis hide />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Bar name="Volume de Vendas" dataKey="salesCount" fill="#920074" radius={[4, 4, 0, 0]} barSize={45}>
-                        <LabelList 
-                          dataKey="salesCount" 
-                          position="insideTop" 
-                          offset={12} 
-                          style={{fontSize: 12, fontWeight: 'black', fill: '#ffffff'}} 
-                        />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl shadow-sm">
-                <div className="flex items-center gap-2 mb-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm">
+                <div className="flex items-center gap-2 mb-5">
                   <PieIcon className="text-[#920074]" size={20} />
-                  <h3 className="font-bold text-gray-800">Lucro Líquido por Modalidade</h3>
+                  <h3 className="font-bold text-gray-800">Lucro Líquido por Origem</h3>
                 </div>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={kpis.modality}
-                        dataKey="profit"
-                        nameKey="name"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        innerRadius={50}
-                        paddingAngle={5}
-                        stroke="none"
-                      >
-                        {kpis.modality.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={['#920074', '#8b5cf6', '#10b981', '#3b82f6'][index % 4]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(val: number) => formatCurrency(val)} />
-                      <Legend 
-                        verticalAlign="bottom" 
-                        align="center" 
-                        layout="horizontal" 
-                        iconType="circle"
-                        formatter={(value, entry: any) => {
-                          const val = entry.payload.profit;
-                          const percent = totalModalityProfit > 0 ? ((val / totalModalityProfit) * 100).toFixed(0) : 0;
-                          return <span className="text-[10px] md:text-xs font-bold text-gray-600">{value} ({percent}%)</span>;
-                        }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
+                <ListaDeBarras
+                  cor={VERDE}
+                  itens={kpis.modality.map(m => ({
+                    chave: m.name, rotulo: m.name, valor: m.profit, texto: formatCurrency(m.profit),
+                    detalhe: kpis.totalProfit > 0 ? `${Math.round((100 * m.profit) / kpis.totalProfit)}% do lucro` : undefined,
+                  }))}
+                />
               </div>
 
-              <div className="bg-white p-6 rounded-2xl shadow-sm">
-                <div className="flex items-center gap-2 mb-6">
+              <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm">
+                <div className="flex items-center gap-2 mb-5">
                   <BarChart3 className="text-[#920074]" size={20} />
                   <h3 className="font-bold text-gray-800">Lucro Líquido por Produto</h3>
                 </div>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart layout="vertical" data={kpis.productProfit.slice(0, 6)} margin={{ left: 20 }}>
-                      <XAxis type="number" hide />
-                      <YAxis dataKey="name" type="category" width={80} tick={{fontSize: 9}} axisLine={false} tickLine={false} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Bar name="Lucro" dataKey="profit" fill="#10b981" radius={[0, 4, 4, 0]} barSize={20}>
-                        <LabelList 
-                          dataKey="profit" 
-                          position="insideRight" 
-                          offset={10} 
-                          formatter={(v: number) => `R$${v.toFixed(0)}`} 
-                          style={{fontSize: 9, fontWeight: 'bold', fill: '#ffffff'}} 
-                        />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                <ListaDeBarras
+                  cor={VERDE}
+                  itens={kpis.productProfit.map(p => ({ chave: p.name, rotulo: p.name, valor: p.profit, texto: formatCurrency(p.profit), detalhe: `${p.units} un.` }))}
+                />
+              </div>
+
+              <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm">
+                <div className="flex items-center gap-2 mb-5">
+                  <Calendar className="text-[#920074]" size={20} />
+                  <h3 className="font-bold text-gray-800">Vendas por Dia da Semana</h3>
                 </div>
+                <ListaDeBarras
+                  cor={ROXO}
+                  itens={kpis.weekday.map(d => ({ chave: d.name, rotulo: d.name, valor: d.salesCount, texto: `${d.salesCount} ${d.salesCount === 1 ? 'venda' : 'vendas'}`, detalhe: formatCurrency(d.amount) }))}
+                />
               </div>
             </div>
           </div>
@@ -884,9 +774,11 @@ const App: React.FC = () => {
                       <Info size={14} className="text-blue-500" /> Custo médio calculado automaticamente.
                     </div>
                 </div>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-wider">
+                {/* No celular cada linha vira cartão: produto e quantidade em cima,
+                    custo e preço embaixo, ações à direita. Nada de rolagem lateral. */}
+                <div>
+                    <table className="block md:table w-full text-left">
+                        <thead className="hidden md:table-header-group bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-wider">
                             <tr>
                                 <th className="px-6 py-4">Produto</th>
                                 <th className="px-6 py-4">Estoque</th>
@@ -895,33 +787,37 @@ const App: React.FC = () => {
                                 <th className="px-6 py-4 text-right">Ação</th>
                             </tr>
                         </thead>
-                        <tbody className="text-sm">
+                        <tbody className="block md:table-row-group text-sm">
                             {inventory.map(item => (
-                                <tr key={item.id} className="hover:bg-gray-50/50 transition group">
-                                    <td className="px-6 py-4 font-bold text-gray-900 whitespace-nowrap">{item.productName}</td>
-                                    <td className="px-6 py-4">
-                                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase text-slate-900 ${item.quantity < 5 ? 'bg-red-100' : 'bg-emerald-100'}`}>
+                                <tr key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-3 border-t border-gray-100 md:table-row md:p-0 md:border-0 hover:bg-gray-50/50 transition group">
+                                    <td className="col-start-1 row-start-1 min-w-0 md:px-6 md:py-4 font-bold text-gray-900 break-words md:whitespace-nowrap">{item.productName}</td>
+                                    <td className="col-start-2 row-start-1 justify-self-end md:px-6 md:py-4">
+                                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase text-slate-900 whitespace-nowrap ${item.quantity < 5 ? 'bg-red-100' : 'bg-emerald-100'}`}>
                                             {item.quantity} UN.
                                         </span>
                                     </td>
-                                    <td className="px-6 py-4 font-medium text-slate-500 whitespace-nowrap">{formatCurrency(item.costPrice)}</td>
-                                    <td className="px-6 py-4 font-bold text-[#920074] whitespace-nowrap">{item.defaultSellPrice ? formatCurrency(item.defaultSellPrice) : '-'}</td>
-                                    <td className="px-6 py-4 text-right">
+                                    <td className="col-start-1 row-start-2 md:px-6 md:py-4 text-xs md:text-sm font-medium text-slate-500 md:whitespace-nowrap">
+                                        <span className="md:hidden">Custo </span>{formatCurrency(item.costPrice)}
+                                        <span className="md:hidden"> · Venda <b className="text-[#920074]">{item.defaultSellPrice ? formatCurrency(item.defaultSellPrice) : '-'}</b></span>
+                                    </td>
+                                    <td className="hidden md:table-cell px-6 py-4 font-bold text-[#920074] whitespace-nowrap">{item.defaultSellPrice ? formatCurrency(item.defaultSellPrice) : '-'}</td>
+                                    <td className="col-start-2 row-start-2 md:px-6 md:py-4 text-right">
                                       <div className="flex justify-end gap-1">
                                         <button 
-                                          onClick={() => { setInventoryFormInitialProduct(item); setIsInventoryFormOpen(true); }}
+                                          onClick={() => abrirEstoque(item.quantity < 0 ? 'count' : 'restock', item)}
                                           className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 text-[#920074] rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-[#920074] hover:text-white transition"
                                         >
-                                          <RefreshCw size={12} /> Repor
+                                          {/* Estoque negativo não se resolve repondo: precisa da contagem. */}
+                                          {item.quantity < 0 ? <><ClipboardList size={12} /> Corrigir</> : <><RefreshCw size={12} /> Repor</>}
                                         </button>
-                                        <button onClick={() => handleDeleteProduct(item.id)} className="p-2 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
+                                        <button onClick={() => pedirApagarProduto(item)} className="p-2 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
                                       </div>
                                     </td>
                                 </tr>
                             ))}
                             {inventory.length === 0 && (
-                                <tr>
-                                    <td colSpan={5} className="px-6 py-20 text-center text-gray-400 italic">Nenhum item cadastrado.</td>
+                                <tr className="block md:table-row">
+                                    <td colSpan={5} className="block md:table-cell px-6 py-20 text-center text-gray-400 italic">Nenhum item cadastrado.</td>
                                 </tr>
                             )}
                         </tbody>
@@ -935,9 +831,11 @@ const App: React.FC = () => {
                 <div className="p-6">
                     <h3 className="font-bold text-gray-800">Histórico de Movimentações</h3>
                 </div>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-wider">
+                {/* No celular cada linha vira cartão: cliente e bruto em cima,
+                    produto, origem e data embaixo com o líquido, lixeira na ponta. */}
+                <div>
+                    <table className="block md:table w-full text-left">
+                        <thead className="hidden md:table-header-group bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-wider">
                             <tr>
                                 <th className="px-6 py-4">Data</th>
                                 <th className="px-6 py-4">Cliente</th>
@@ -947,136 +845,50 @@ const App: React.FC = () => {
                                 <th className="px-6 py-4 text-right">Ação</th>
                             </tr>
                         </thead>
-                        <tbody className="text-sm">
-                            {filteredSales.map(sale => {
-                                const adCost = sale.adCost || 0;
-                                const disc = sale.discount || 0;
-                                const profit = sale.amount - disc - sale.commissionValue - (sale.cost || 0) - (sale.freight || 0) - adCost;
+                        <tbody className="block md:table-row-group text-sm">
+                            {historico.map(({ chave, venda: sale, itens }) => {
+                                const bruto = itens.reduce((s, i) => s + i.amount, 0);
+                                const profit = itens.reduce((s, i) => s + lucroDaVenda(i), 0);
+                                const produtos = sale.wholesale
+                                  ? itens.map(i => `${unidades(i)} ${i.productName}`).join(', ')
+                                  : sale.productName;
                                 return (
-                                <tr key={sale.id} className="hover:bg-gray-50/50 transition">
-                                    <td className="px-6 py-4 text-gray-400 text-[11px] whitespace-nowrap">{parseLocalDate(sale.date).toLocaleDateString('pt-BR')}</td>
-                                    <td className="px-6 py-4 font-bold text-gray-900 whitespace-nowrap">
-                                        <div className="flex flex-col">
-                                            <span>{sale.clientName}</span>
-                                            <span className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">{sale.saleType}</span>
+                                <tr key={chave} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-0.5 px-4 py-3 border-t border-gray-100 md:table-row md:p-0 md:border-0 hover:bg-gray-50/50 transition">
+                                    <td className="hidden md:table-cell px-6 py-4 text-gray-400 text-[11px] whitespace-nowrap">{parseLocalDate(sale.date).toLocaleDateString('pt-BR')}</td>
+                                    <td className="col-start-1 row-start-1 row-span-2 min-w-0 md:px-6 md:py-4 font-bold text-gray-900 md:whitespace-nowrap">
+                                        <div className="flex flex-col min-w-0">
+                                            <span className="break-words">{sale.clientName}</span>
+                                            <span className={`hidden md:inline text-[9px] font-bold uppercase tracking-tighter ${sale.wholesale ? 'text-[#920074]' : 'text-gray-400'}`}>{sale.wholesale ? 'Atacado' : rotuloOrigem(sale.saleType)}</span>
+                                            <span className="md:hidden text-xs font-medium text-gray-400 break-words">
+                                                {sale.wholesale
+                                                  ? <><span className="text-[#920074]">Atacado</span> · {produtos} · {dataCurta(sale.date)}</>
+                                                  : <>{produtos} · {rotuloOrigem(sale.saleType)} · {dataCurta(sale.date)}</>}
+                                            </span>
                                         </div>
                                     </td>
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                      <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded-full font-bold text-slate-600">{sale.productName}</span>
+                                    <td className="hidden md:table-cell px-6 py-4">
+                                      <div className="flex flex-wrap gap-1">
+                                        {itens.map(i => (
+                                          <span key={i.id} className="text-[10px] bg-slate-100 px-2 py-0.5 rounded-full font-bold text-slate-600 whitespace-nowrap">
+                                            {sale.wholesale ? `${unidades(i)}× ${i.productName}` : i.productName}
+                                          </span>
+                                        ))}
+                                      </div>
                                     </td>
-                                    <td className="px-6 py-4 font-medium text-gray-600 whitespace-nowrap">{formatCurrency(sale.amount)}</td>
-                                    <td className="px-6 py-4 font-black text-emerald-600 whitespace-nowrap">{formatCurrency(profit)}</td>
-                                    <td className="px-6 py-4 text-right">
-                                        <button onClick={() => db.deleteSale(sale.id).then(loadData)} className="p-2 text-gray-200 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
+                                    <td className="col-start-2 row-start-1 text-right md:text-left md:px-6 md:py-4 font-medium text-gray-600 whitespace-nowrap">{formatCurrency(bruto)}</td>
+                                    <td className="col-start-2 row-start-2 text-right md:text-left text-xs md:text-sm md:px-6 md:py-4 font-black text-emerald-600 whitespace-nowrap">{formatCurrency(profit)}</td>
+                                    <td className="col-start-3 row-start-1 row-span-2 md:px-6 md:py-4 text-right">
+                                        <button onClick={() => pedirApagarVenda(itens)} className="p-2 text-gray-300 md:text-gray-200 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
                                     </td>
                                 </tr>
                             )})}
-                            {filteredSales.length === 0 && (
-                                <tr>
-                                    <td colSpan={6} className="px-6 py-20 text-center text-gray-400 italic">Nenhum resultado encontrado para o filtro.</td>
+                            {historico.length === 0 && (
+                                <tr className="block md:table-row">
+                                    <td colSpan={6} className="block md:table-cell px-6 py-20 text-center text-gray-400 italic">Nenhum resultado encontrado para o filtro.</td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
-                </div>
-            </div>
-        )}
-
-        {activeTab === 'leads' && (
-            <div className="space-y-4">
-                <div className="flex items-center gap-3 text-sm text-amber-700 bg-amber-50 p-4 rounded-2xl">
-                  <div className="bg-amber-100 p-2 rounded-lg"><Users size={18} /></div>
-                  <p><b>Leads:</b> Clientes que demonstraram interesse, mas ainda não converteram em venda.</p>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {leads.map(lead => (
-                        <div key={lead.id} className="bg-white p-6 rounded-2xl shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow group">
-                            <div>
-                                <div className="flex justify-between items-start mb-4">
-                                    <h4 className="font-bold text-gray-900 text-lg group-hover:text-[#920074] transition-colors">{lead.clientName}</h4>
-                                    <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-black uppercase">Pendente</span>
-                                </div>
-                                <div className="space-y-3 text-sm">
-                                    <div className="flex items-center gap-2 text-gray-600">
-                                      <ShoppingCart size={14} className="text-[#920074]" />
-                                      <span>Interesse: <b className="text-gray-900">{lead.productInterest}</b></span>
-                                    </div>
-                                    {lead.phone && <div className="flex items-center gap-2 text-gray-600">
-                                      <DollarSign size={14} className="text-emerald-500" />
-                                      <span>{lead.phone}</span>
-                                    </div>}
-                                    {lead.expectedDate && <div className="flex items-center gap-2 text-orange-600 font-bold">
-                                      <Calendar size={14} />
-                                      <span>Previsão: {parseLocalDate(lead.expectedDate).toLocaleDateString('pt-BR')}</span>
-                                    </div>}
-                                    {lead.notes && <p className="italic text-xs text-gray-400 bg-gray-50 p-3 rounded-xl mt-2">"{lead.notes}"</p>}
-                                </div>
-                            </div>
-                            <div className="mt-6 pt-4 border-t border-gray-100 flex justify-between items-center gap-2">
-                                <button onClick={() => handleConvertLead(lead)} className="flex-1 bg-emerald-50 text-emerald-600 px-4 py-2.5 rounded-xl font-bold text-xs hover:bg-emerald-100 flex items-center justify-center gap-1.5 transition">
-                                    <ShoppingCart size={16} /> Vender
-                                </button>
-                                <button onClick={() => db.deleteLead(lead.id).then(loadData)} className="p-2.5 text-gray-300 hover:text-red-500 bg-gray-50 rounded-xl transition-colors"><Trash2 size={18} /></button>
-                            </div>
-                        </div>
-                    ))}
-                    {leads.length === 0 && (
-                        <div className="col-span-full py-20 text-center text-gray-400 italic bg-white rounded-2xl text-slate-900">Sem leads pendentes no momento.</div>
-                    )}
-                </div>
-            </div>
-        )}
-
-        {activeTab === 'repurchase' && (
-            <div className="space-y-6">
-                <div className="bg-gradient-to-br from-[#920074] to-[#74005c] p-6 md:p-8 rounded-3xl text-white shadow-xl overflow-hidden relative">
-                  <div className="relative z-10">
-                    <h3 className="text-xl md:text-2xl font-black mb-2 flex items-center gap-2">
-                      <RefreshCw className="animate-spin-slow" size={24} /> Ouro na Mão!
-                    </h3>
-                    <p className="text-white/80 text-sm md:text-base max-w-lg">
-                      Estes clientes compraram há mais de <b>28 dias</b>. Eles já conhecem a qualidade do seu produto, agora é só oferecer de novo!
-                    </p>
-                  </div>
-                  <div className="absolute right-[-20px] bottom-[-20px] opacity-10 text-white">
-                    <RefreshCw size={150} />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {repurchaseList.map(sale => {
-                        const today = new Date();
-                        const saleDate = parseLocalDate(sale.date);
-                        const diffDays = Math.ceil(Math.abs(today.getTime() - saleDate.getTime()) / (1000 * 60 * 60 * 24));
-                        return (
-                            <div key={sale.id} className="bg-white p-6 rounded-2xl shadow-sm flex flex-col justify-between hover:shadow-md transition group">
-                                <div>
-                                    <div className="flex justify-between items-start mb-4">
-                                        <h4 className="font-bold text-gray-900 text-lg">{sale.clientName}</h4>
-                                        <span className="text-[10px] bg-purple-100 text-[#920074] px-2.5 py-1 rounded-full font-black uppercase">{diffDays} dias</span>
-                                    </div>
-                                    <div className="space-y-3 text-sm text-gray-500">
-                                        <p className="flex items-center gap-2">📦 <b className="text-gray-800">{sale.productName}</b></p>
-                                        <p className="flex items-center gap-2">📅 Última compra: <b>{parseLocalDate(sale.date).toLocaleDateString('pt-BR')}</b></p>
-                                    </div>
-                                </div>
-                                <div className="mt-6 pt-4 border-t border-gray-100">
-                                    <button 
-                                      onClick={() => {
-                                        setSalesFormInitialData({ clientName: sale.clientName, productName: sale.productName });
-                                        setIsFormOpen(true);
-                                      }}
-                                      className="w-full bg-[#920074] text-white px-4 py-3 rounded-xl font-bold text-xs hover:bg-[#74005c] flex items-center justify-center gap-2 shadow-lg transition transform active:scale-[0.98]"
-                                    >
-                                        <RefreshCw size={16} /> Registrar Recompra
-                                    </button>
-                                </div>
-                            </div>
-                        )
-                    })}
-                    {repurchaseList.length === 0 && (
-                        <div className="col-span-full py-20 text-center text-gray-400 italic bg-white rounded-2xl text-slate-900">Nenhum cliente no ciclo de recompra ainda.</div>
-                    )}
                 </div>
             </div>
         )}
@@ -1099,25 +911,28 @@ const App: React.FC = () => {
           <Package size={22} />
           <span className="text-[10px] font-bold">Estoque</span>
         </button>
-        <button onClick={() => setActiveTab('leads')} className={`flex flex-col items-center gap-1 transition ${activeTab === 'leads' ? 'text-[#920074]' : 'text-gray-400'}`}>
-          <Users size={22} />
-          <span className="text-[10px] font-bold">Leads</span>
-        </button>
-        <button onClick={() => setActiveTab('repurchase')} className={`flex flex-col items-center gap-1 transition ${activeTab === 'repurchase' ? 'text-[#920074]' : 'text-gray-400'}`}>
-          <RefreshCw size={22} />
-          <span className="text-[10px] font-bold">Recompra</span>
-        </button>
       </nav>
 
-      {isFormOpen && <SalesForm onAddSale={handleAddSale} inventory={inventory} initialData={salesFormInitialData} onClose={() => { setIsFormOpen(false); setSalesFormInitialData(null); }} />}
-      {isLeadFormOpen && <LeadForm onAddLead={(l) => { db.addLead(l).then(loadData); setIsLeadFormOpen(false); }} onClose={() => setIsLeadFormOpen(false)} />}
+      {isFormOpen && <SalesForm onAddSale={handleAddSale} inventory={inventory} onClose={() => setIsFormOpen(false)} />}
+      {isAtacadoFormOpen && <AtacadoForm onSave={handleAddWholesale} inventory={inventory} onClose={() => setIsAtacadoFormOpen(false)} />}
       {isInventoryFormOpen && (
         <InventoryForm 
           allProducts={inventory}
           initialProduct={inventoryFormInitialProduct}
           onAdd={handleAddInventory} 
           onRestock={handleRestockInventory}
+          onCount={handleCountInventory}
+          initialMode={inventoryFormMode}
           onClose={() => { setIsInventoryFormOpen(false); setInventoryFormInitialProduct(null); }} 
+        />
+      )}
+      {confirmacao && (
+        <Confirmacao
+          titulo={confirmacao.titulo}
+          texto={confirmacao.texto}
+          confirmar={confirmacao.confirmar}
+          onConfirmar={confirmacao.acao}
+          onCancelar={() => setConfirmacao(null)}
         />
       )}
     </div>

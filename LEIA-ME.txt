@@ -1,0 +1,38 @@
+ROSE GESTAO: o que subir no GitHub (07/10/2026)
+
+ORDEM
+1. Rodar o SQL do atacado no Supabase (esta no chat). Pode ser antes ou
+   depois de subir; so a "Venda Atacado" depende dele. A venda normal
+   funciona com ou sem.
+2. Subir os arquivos desta pasta.
+3. Apagar os 2 arquivos velhos (lista abaixo).
+
+SUBIR (13 arquivos). Arraste o CONTEUDO desta pasta (nao a pasta em si)
+para a raiz do repositorio, mantendo as pastas components, public,
+services e utils. O GitHub substitui os que ja existem.
+
+  App.tsx
+  index.tsx
+  types.ts
+  components/AtacadoForm.tsx        (novo)
+  components/Confirmacao.tsx        (novo)
+  components/DateRangePicker.tsx    (novo)
+  components/GraficoEvolucao.tsx    (novo)
+  components/ListaDeBarras.tsx      (novo)
+  components/InventoryForm.tsx
+  components/SalesForm.tsx
+  public/sw.js                      (novo, pasta nova)
+  services/db.ts
+  utils/datas.ts                    (novo, pasta nova)
+
+APAGAR no GitHub (2 arquivos, nao servem mais)
+  components/LeadForm.tsx    (era a guia Leads)
+  sw.js  (o da RAIZ; o novo fica em public/sw.js)
+
+NAO MEXER
+  package.json e package-lock.json ficam como estao no GitHub.
+
+CONFERIR DEPOIS DE SUBIR
+  Upload pelo site as vezes perde arquivo sem avisar. Confira no GitHub
+  que as pastas components (8 arquivos), public, services e utils estao
+  la, com os arquivos novos acima.
